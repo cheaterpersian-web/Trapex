@@ -33,7 +33,11 @@ jobs:
       - name: Archive artifact (zip)
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/HSVCalibrator.exe -DestinationPath dist/HSVCalibrator-win64.zip -Force
+          Copy-Item scripts/run_calibrator.bat dist/
+          New-Item -ItemType Directory -Force -Path dist/calibrations | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
+          Copy-Item windows/version_file.txt dist/windows/
+          Compress-Archive -Path dist/HSVCalibrator.exe, dist/run_calibrator.bat, dist/windows/version_file.txt -DestinationPath dist/HSVCalibrator-win64.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

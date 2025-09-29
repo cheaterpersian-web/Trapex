@@ -60,6 +60,32 @@ def parse_video_source(source: str) -> int | str:
         return source
 
 
+def map_backend_flag(name: str) -> int:
+    name_l = (name or "").strip().lower()
+    if name_l in ("msmf", "mf"):
+        return cv2.CAP_MSMF
+    if name_l in ("dshow", "directshow"):
+        return cv2.CAP_DSHOW
+    if name_l in ("v4l", "v4l2"):
+        return cv2.CAP_V4L2
+    if name_l in ("ffmpeg", "av"):
+        return cv2.CAP_FFMPEG
+    return cv2.CAP_ANY
+
+
+def try_open_capture(src: int | str, backend: int, width: int, height: int) -> Optional[cv2.VideoCapture]:
+    cap = cv2.VideoCapture(src, backend)
+    if not cap or not cap.isOpened():
+        if cap:
+            cap.release()
+        return None
+    if width > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+    if height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+    return cap
+
+
 def save_profile(path: str, hsv: HsvBounds, roi_size: int, min_pixels: int, blur: int) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     payload = {
@@ -164,13 +190,43 @@ def run_calibrator(args: argparse.Namespace) -> None:
             cv2.setTrackbarPos("Blur",   "controls", blur)
 
     source = parse_video_source(args.source)
-    cap = cv2.VideoCapture(source)
-    if args.width > 0:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(args.width))
-    if args.height > 0:
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(args.height))
+    backend_sequence = []
+    # Prefer specific backend if provided
+    preferred = map_backend_flag(args.backend)
+    if preferred != cv2.CAP_ANY:
+        backend_sequence.append(preferred)
+    # On Windows, try MSMF then DSHOW; on Linux, V4L2 then ANY
+    if os.name == 'nt':
+        if cv2.CAP_MSMF not in backend_sequence:
+            backend_sequence.append(cv2.CAP_MSMF)
+        if cv2.CAP_DSHOW not in backend_sequence:
+            backend_sequence.append(cv2.CAP_DSHOW)
+    else:
+        if cv2.CAP_V4L2 not in backend_sequence:
+            backend_sequence.append(cv2.CAP_V4L2)
+    if cv2.CAP_ANY not in backend_sequence:
+        backend_sequence.append(cv2.CAP_ANY)
 
-    if not cap.isOpened():
+    cap = None
+    if isinstance(source, int):
+        # Probe multiple camera indices if requested
+        candidates = [source] if not args.probe else list(range(args.probe_start, args.probe_end + 1))
+        for b in backend_sequence:
+            for idx in candidates:
+                cap = try_open_capture(idx, b, args.width, args.height)
+                if cap is not None:
+                    source = idx
+                    break
+            if cap is not None:
+                break
+    else:
+        # File path
+        for b in backend_sequence:
+            cap = try_open_capture(source, b, args.width, args.height)
+            if cap is not None:
+                break
+
+    if cap is None:
         raise RuntimeError(f"Cannot open video source: {args.source}")
 
     kernel = np.ones((3, 3), np.uint8)
@@ -412,6 +468,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--controls-width", type=int, default=420)
     parser.add_argument("--controls-height", type=int, default=360)
+    parser.add_argument("--backend", type=str, default="", help="Preferred backend: msmf|dshow|v4l2|ffmpeg|any")
+    parser.add_argument("--probe", action="store_true", help="Probe camera indices if initial source fails")
+    parser.add_argument("--probe-start", type=int, default=0)
+    parser.add_argument("--probe-end", type=int, default=5)
     return parser
 
 
