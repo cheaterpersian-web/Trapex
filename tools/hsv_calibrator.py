@@ -272,6 +272,22 @@ def run_calibrator(args: argparse.Namespace) -> None:
     frame_count = 0
     fps = 0.0
     paused = False
+    ended = False
+    is_file_source = (not screen_mode) and isinstance(source, str)
+
+    def reopen_file_capture(path: str) -> bool:
+        nonlocal cap
+        # Try to reopen the same file capture from beginning
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        for b in backend_sequence:
+            cap = try_open_capture(path, b, args.width, args.height)
+            if cap is not None:
+                return True
+        return False
 
     while True:
         if not paused:
@@ -279,9 +295,24 @@ def run_calibrator(args: argparse.Namespace) -> None:
                 raw = np.array(sct.grab(screen_mon))  # BGRA
                 frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
                 ok = True
+                ended = False
             else:
                 ok, frame = cap.read()
                 if not ok:
+                    if is_file_source:
+                        if args.on_end == "loop":
+                            # Try to seek to start; if it fails, reopen
+                            if not cap.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                                reopen_file_capture(source)  # best-effort
+                            ended = False
+                            continue
+                        if args.on_end == "pause":
+                            paused = True
+                            ended = True
+                            continue
+                        # exit
+                        break
+                    # camera or unknown -> exit
                     break
         else:
             # When paused, still show the last frame and UI updates
@@ -385,6 +416,11 @@ def run_calibrator(args: argparse.Namespace) -> None:
             frame, f"Slot:{current_slot} Overlay:{'ON' if overlay_on else 'OFF'}", (10, 104),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 220, 255), 2, cv2.LINE_AA,
         )
+        if ended:
+            cv2.putText(
+                frame, "End of video - r: replay, n: open file, q: quit", (10, 130),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2, cv2.LINE_AA,
+            )
 
         # Rising-edge logging
         above = (count >= min_pixels) and (largest_area >= float(args.min_area))
@@ -410,6 +446,8 @@ def run_calibrator(args: argparse.Namespace) -> None:
             break
         if key == ord(" "):
             paused = not paused
+            if not paused:
+                ended = False
         # Profile slots: 1..9 select current slot and try loading it
         if key in [ord(str(n)) for n in range(1, 10)]:
             current_slot = int(chr(key))
@@ -446,7 +484,15 @@ def run_calibrator(args: argparse.Namespace) -> None:
         if key == ord("=") or key == ord("+"):
             cv2.setTrackbarPos("ROI", "controls", min(800, roi_size + args.roi_step))
         if key == ord("r"):
-            roi_cx, roi_cy = w // 2, h // 2
+            # replay current file if ended, else recenter ROI
+            if is_file_source:
+                if cap is not None:
+                    if not cap.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                        reopen_file_capture(source)
+                paused = False
+                ended = False
+            else:
+                roi_cx, roi_cy = w // 2, h // 2
 
         # Overlay and mask window toggles
         if key == ord("o"):
@@ -486,6 +532,23 @@ def run_calibrator(args: argparse.Namespace) -> None:
                     print(f"Loaded slot {current_slot} profile from {source_path}")
             else:
                 print(f"Profile not found: {source_path}")
+        if key in (ord("n"), ord("N")) and not screen_mode:
+            # open a new file via picker
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk(); root.withdraw()
+                file_path = filedialog.askopenfilename(title="Select a video file",
+                                                       filetypes=[("Video Files", ".mp4 .avi .mov .mkv .m4v"), ("All Files", "*.*")])
+                root.destroy()
+                if file_path:
+                    source = file_path
+                    if reopen_file_capture(source):
+                        paused = False
+                        ended = False
+                        is_file_source = True
+            except Exception:
+                pass
 
     if cap is not None:
         cap.release()
@@ -536,6 +599,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe-start", type=int, default=0)
     parser.add_argument("--probe-end", type=int, default=5)
     parser.add_argument("--screen-monitor", type=int, default=1, help="mss monitor index: 0=all, 1=primary, 2=secondary, ...")
+    parser.add_argument("--on-end", type=str, default="pause", choices=["pause", "loop", "exit"], help="What to do when video ends")
     return parser
 
 
