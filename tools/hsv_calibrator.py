@@ -189,7 +189,9 @@ def run_calibrator(args: argparse.Namespace) -> None:
             cv2.setTrackbarPos("MinPix", "controls", min_pixels)
             cv2.setTrackbarPos("Blur",   "controls", blur)
 
-    source = parse_video_source(args.source)
+    # Determine initial source: explicit --source, else positional input_file, else default '0'
+    source_str = args.source if str(args.source).strip() != "" else (args.input_file if str(getattr(args, "input_file", "")).strip() != "" else "0")
+    source = parse_video_source(source_str)
     backend_sequence = []
     # Prefer specific backend if provided
     preferred = map_backend_flag(args.backend)
@@ -227,7 +229,30 @@ def run_calibrator(args: argparse.Namespace) -> None:
                 break
 
     if cap is None:
-        raise RuntimeError(f"Cannot open video source: {args.source}")
+        # On Windows without a camera, offer a file picker if no input_file was provided
+        default_like_cam = str(args.source).strip() in ("", "0") and str(getattr(args, "input_file", "")).strip() == ""
+        if os.name == 'nt' and default_like_cam:
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                file_path = filedialog.askopenfilename(title="Select a video file",
+                                                       filetypes=[
+                                                           ("Video Files", ".mp4 .avi .mov .mkv .m4v"),
+                                                           ("All Files", "*.*"),
+                                                       ])
+                root.destroy()
+                if file_path:
+                    source = file_path
+                    for b in backend_sequence:
+                        cap = try_open_capture(source, b, args.width, args.height)
+                        if cap is not None:
+                            break
+            except Exception:
+                pass
+    if cap is None:
+        raise RuntimeError(f"Cannot open video source: {args.source or getattr(args, 'input_file', '')}")
 
     kernel = np.ones((3, 3), np.uint8)
     prev_time = time.time()
@@ -443,6 +468,7 @@ def run_calibrator(args: argparse.Namespace) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="HSV Calibration tool (safe)")
+    parser.add_argument("input_file", nargs="?", default="", help="Optional video file path")
     parser.add_argument("--source", type=str, default="0", help="Webcam index like '0' or a video file path")
     parser.add_argument("--width", type=int, default=0, help="Requested capture width (0 = default)")
     parser.add_argument("--height", type=int, default=0, help="Requested capture height (0 = default)")
