@@ -31,6 +31,7 @@ from typing import Tuple, Optional
 
 import cv2
 import numpy as np
+import mss
 
 
 # ------------------------- Utility structures -------------------------
@@ -192,6 +193,7 @@ def run_calibrator(args: argparse.Namespace) -> None:
     # Determine initial source: explicit --source, else positional input_file, else default '0'
     source_str = args.source if str(args.source).strip() != "" else (args.input_file if str(getattr(args, "input_file", "")).strip() != "" else "0")
     source = parse_video_source(source_str)
+    screen_mode = isinstance(source, str) and str(source).strip().lower() == "screen"
     backend_sequence = []
     # Prefer specific backend if provided
     preferred = map_backend_flag(args.backend)
@@ -210,25 +212,36 @@ def run_calibrator(args: argparse.Namespace) -> None:
         backend_sequence.append(cv2.CAP_ANY)
 
     cap = None
-    if isinstance(source, int):
-        # Probe multiple camera indices if requested
-        candidates = [source] if not args.probe else list(range(args.probe_start, args.probe_end + 1))
-        for b in backend_sequence:
-            for idx in candidates:
-                cap = try_open_capture(idx, b, args.width, args.height)
-                if cap is not None:
-                    source = idx
-                    break
-            if cap is not None:
-                break
+    sct = None
+    screen_mon = None
+    if screen_mode:
+        sct = mss.mss()
+        monitors = sct.monitors
+        # 0 = virtual bounding box of all monitors, 1 = primary
+        mon_index = int(args.screen_monitor)
+        if mon_index < 0 or mon_index >= len(monitors):
+            mon_index = 1 if len(monitors) > 1 else 0
+        screen_mon = monitors[mon_index]
     else:
-        # File path
-        for b in backend_sequence:
-            cap = try_open_capture(source, b, args.width, args.height)
-            if cap is not None:
-                break
+        if isinstance(source, int):
+            # Probe multiple camera indices if requested
+            candidates = [source] if not args.probe else list(range(args.probe_start, args.probe_end + 1))
+            for b in backend_sequence:
+                for idx in candidates:
+                    cap = try_open_capture(idx, b, args.width, args.height)
+                    if cap is not None:
+                        source = idx
+                        break
+                if cap is not None:
+                    break
+        else:
+            # File path
+            for b in backend_sequence:
+                cap = try_open_capture(source, b, args.width, args.height)
+                if cap is not None:
+                    break
 
-    if cap is None:
+    if cap is None and not screen_mode:
         # On Windows without a camera, offer a file picker if no input_file was provided
         default_like_cam = str(args.source).strip() in ("", "0") and str(getattr(args, "input_file", "")).strip() == ""
         if os.name == 'nt' and default_like_cam:
@@ -251,7 +264,7 @@ def run_calibrator(args: argparse.Namespace) -> None:
                             break
             except Exception:
                 pass
-    if cap is None:
+    if cap is None and not screen_mode:
         raise RuntimeError(f"Cannot open video source: {args.source or getattr(args, 'input_file', '')}")
 
     kernel = np.ones((3, 3), np.uint8)
@@ -262,9 +275,14 @@ def run_calibrator(args: argparse.Namespace) -> None:
 
     while True:
         if not paused:
-            ok, frame = cap.read()
-            if not ok:
-                break
+            if screen_mode:
+                raw = np.array(sct.grab(screen_mon))  # BGRA
+                frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
+                ok = True
+            else:
+                ok, frame = cap.read()
+                if not ok:
+                    break
         else:
             # When paused, still show the last frame and UI updates
             ok = True
@@ -469,7 +487,13 @@ def run_calibrator(args: argparse.Namespace) -> None:
             else:
                 print(f"Profile not found: {source_path}")
 
-    cap.release()
+    if cap is not None:
+        cap.release()
+    if sct is not None:
+        try:
+            sct.close()
+        except Exception:
+            pass
     if csv_file is not None:
         try:
             csv_file.close()
@@ -507,10 +531,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--controls-width", type=int, default=420)
     parser.add_argument("--controls-height", type=int, default=360)
-    parser.add_argument("--backend", type=str, default="", help="Preferred backend: msmf|dshow|v4l2|ffmpeg|any")
+    parser.add_argument("--backend", type=str, default="", help="Preferred backend: msmf|dshow|v4l2|ffmpeg|any|screen")
     parser.add_argument("--probe", action="store_true", help="Probe camera indices if initial source fails")
     parser.add_argument("--probe-start", type=int, default=0)
     parser.add_argument("--probe-end", type=int, default=5)
+    parser.add_argument("--screen-monitor", type=int, default=1, help="mss monitor index: 0=all, 1=primary, 2=secondary, ...")
     return parser
 
 
