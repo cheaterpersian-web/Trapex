@@ -193,7 +193,8 @@ def run_calibrator(args: argparse.Namespace) -> None:
     # Determine initial source: explicit --source, else positional input_file, else default '0'
     source_str = args.source if str(args.source).strip() != "" else (args.input_file if str(getattr(args, "input_file", "")).strip() != "" else "0")
     source = parse_video_source(source_str)
-    screen_mode = isinstance(source, str) and str(source).strip().lower() == "screen"
+    backend_is_screen = (args.backend or "").strip().lower() == "screen"
+    screen_mode = (isinstance(source, str) and str(source).strip().lower() == "screen") or backend_is_screen
     backend_sequence = []
     # Prefer specific backend if provided
     preferred = map_backend_flag(args.backend)
@@ -568,7 +569,7 @@ def run_calibrator(args: argparse.Namespace) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="HSV Calibration tool (safe)")
     parser.add_argument("input_file", nargs="?", default="", help="Optional video file path")
-    parser.add_argument("--source", type=str, default="0", help="Webcam index like '0' or a video file path")
+    parser.add_argument("--source", type=str, default="screen", help="Webcam index like '0', 'screen' for screen capture, or a video file path")
     parser.add_argument("--width", type=int, default=0, help="Requested capture width (0 = default)")
     parser.add_argument("--height", type=int, default=0, help="Requested capture height (0 = default)")
     parser.add_argument("--profile", type=str, default="", help="JSON file to save/load a single HSV profile (overrides slots)")
