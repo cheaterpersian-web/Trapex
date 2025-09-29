@@ -303,7 +303,19 @@ def run_calibrator(args: argparse.Namespace) -> None:
 
         open_it = max(0, cv2.getTrackbarPos("OpenIt", "controls"))
         close_it = max(0, cv2.getTrackbarPos("CloseIt", "controls"))
+        # Multi-color support: combine slots if requested
         mask = cv2.inRange(hsv, low, high)
+        if args.combine_slots:
+            for slot in args.combine_slots:
+                slot_path = make_slot_profile_path(args.profile_dir, slot)
+                loaded = load_profile(slot_path)
+                if loaded is None:
+                    continue
+                hsv_b, _, _, _ = loaded
+                low_b = np.array([hsv_b.low[0], hsv_b.low[1], hsv_b.low[2]], dtype=np.uint8)
+                high_b = np.array([hsv_b.high[0], hsv_b.high[1], hsv_b.high[2]], dtype=np.uint8)
+                mask_b = cv2.inRange(hsv, low_b, high_b)
+                mask = cv2.bitwise_or(mask, mask_b)
         if open_it > 0:
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=open_it)
         if close_it > 0:
@@ -491,6 +503,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--close-iter", dest="close_iter", type=int, default=1, help="Morphological close iterations")
     parser.add_argument("--min-area", dest="min_area", type=int, default=0, help="Minimum contour area to draw/report (0 disables)")
     parser.add_argument("--log-csv", type=str, default="", help="Append detection events to this CSV file on rising edge")
+    parser.add_argument("--combine-slots", type=int, nargs='*', default=[], help="Combine masks from these profile slots (e.g., --combine-slots 2 3 4)")
 
     parser.add_argument("--controls-width", type=int, default=420)
     parser.add_argument("--controls-height", type=int, default=360)
