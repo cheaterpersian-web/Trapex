@@ -26,18 +26,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build exe with PyInstaller
+      - name: Build exe with PyInstaller (embed OpenCV FFmpeg DLL)
+        shell: pwsh
         run: |
-          pyinstaller tools/hsv_calibrator.py --onefile --name HSVCalibrator --noconfirm --clean --version-file windows/version_file.txt
+          $cv2site = python -c "import cv2, os; print(os.path.dirname(cv2.__file__))"
+          $dll = Get-ChildItem -Path $cv2site -Filter opencv_videoio_ffmpeg*.dll | Select-Object -First 1
+          if ($dll -ne $null) {
+            Write-Host "Found OpenCV FFmpeg DLL: $($dll.FullName)"
+            $addBin = "--add-binary `"$($dll.FullName)`";."
+          } else {
+            Write-Host "OpenCV FFmpeg DLL not found; proceeding without explicit add-binary"
+            $addBin = ""
+          }
+          pyinstaller tools/hsv_calibrator.py --onefile --name HSVCalibrator --noconfirm --clean --version-file windows/version_file.txt $addBin
 
       - name: Archive artifact (zip)
         shell: pwsh
         run: |
           Copy-Item scripts/run_calibrator.bat dist/
+          # Also copy FFmpeg DLL to dist, if present
+          $cv2site = python -c "import cv2, os; print(os.path.dirname(cv2.__file__))"
+          $dll = Get-ChildItem -Path $cv2site -Filter opencv_videoio_ffmpeg*.dll | Select-Object -First 1
+          if ($dll -ne $null) { Copy-Item $dll.FullName dist/ }
           New-Item -ItemType Directory -Force -Path dist/calibrations | Out-Null
           New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
           Copy-Item windows/version_file.txt dist/windows/
-          Compress-Archive -Path dist/HSVCalibrator.exe, dist/run_calibrator.bat, dist/windows/version_file.txt -DestinationPath dist/HSVCalibrator-win64.zip -Force
+          $files = @("dist/HSVCalibrator.exe", "dist/run_calibrator.bat", "dist/windows/version_file.txt")
+          if ($dll -ne $null) { $files += "dist/" + $dll.Name }
+          Compress-Archive -Path $files -DestinationPath dist/HSVCalibrator-win64.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
