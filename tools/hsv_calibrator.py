@@ -3,14 +3,16 @@
 HSV Calibrator (Safe, Non-interactive Tool)
 
 This tool helps you calibrate HSV color thresholds on live webcam input or a video file.
-It draws a centered ROI, applies optional blur and morphology, counts matching pixels,
-and shows FPS. You can save/load HSV profiles to a JSON file.
+It draws a ROI, applies optional blur and morphology, counts matching pixels, overlays
+contours, and shows FPS. You can save/load HSV profiles to a JSON file.
 
 Key bindings:
-  - ESC / q: quit
-  - s: save current settings to --profile
-  - l: load settings from --profile
-  - space: pause/resume video
+  - ESC / q: quit; space: pause/resume video
+  - s: save profile (to --profile or slot file); l: load profile
+  - 1..9: switch profile slot (uses --profile-dir/slot_<n>.json)
+  - f/h: move ROI left/right; t/g: move ROI up/down; r: recenter ROI
+  - -/=: decrease/increase ROI size by --roi-step
+  - o: toggle contour overlay; m: toggle mask window
 
 This script does NOT control mouse/keyboard and is NOT a gameplay automation tool.
 """
@@ -18,6 +20,7 @@ This script does NOT control mouse/keyboard and is NOT a gameplay automation too
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import time
@@ -81,6 +84,11 @@ def load_profile(path: str) -> Optional[Tuple[HsvBounds, int, int, int]]:
     return hsv, roi_size, min_pixels, blur
 
 
+def make_slot_profile_path(profile_dir: str, slot: int) -> str:
+    os.makedirs(profile_dir or ".", exist_ok=True)
+    return os.path.join(profile_dir or ".", f"slot_{int(slot)}.json")
+
+
 # ------------------------- Main calibrator -------------------------
 
 def run_calibrator(args: argparse.Namespace) -> None:
@@ -103,9 +111,44 @@ def run_calibrator(args: argparse.Namespace) -> None:
     cv2.createTrackbar("OpenIt", "controls", args.open_iter, 5, _noop)
     cv2.createTrackbar("CloseIt","controls", args.close_iter,5, _noop)
 
+    # State
+    current_slot = max(1, min(9, int(args.slot)))
+    overlay_on = True
+    show_mask_window = True
+    roi_cx = None  # initialized on first frame
+    roi_cy = None
+    above_prev = False
+    csv_writer = None
+    csv_file = None
+    if args.log_csv:
+        new_file = not os.path.exists(args.log_csv)
+        os.makedirs(os.path.dirname(args.log_csv) or ".", exist_ok=True)
+        csv_file = open(args.log_csv, "a", newline="", encoding="utf-8")
+        csv_writer = csv.writer(csv_file)
+        if new_file:
+            csv_writer.writerow([
+                "timestamp_utc", "slot", "count", "min_pixels", "largest_area",
+                "min_area", "coverage", "fps", "left", "top", "right", "bottom",
+            ])
+
     # Try to load a profile if provided and exists
     if args.profile:
         loaded = load_profile(args.profile)
+        if loaded is not None:
+            hsv, roi_size, min_pixels, blur = loaded
+            cv2.setTrackbarPos("H_low",  "controls", hsv.low[0])
+            cv2.setTrackbarPos("S_low",  "controls", hsv.low[1])
+            cv2.setTrackbarPos("V_low",  "controls", hsv.low[2])
+            cv2.setTrackbarPos("H_high", "controls", hsv.high[0])
+            cv2.setTrackbarPos("S_high", "controls", hsv.high[1])
+            cv2.setTrackbarPos("V_high", "controls", hsv.high[2])
+            cv2.setTrackbarPos("ROI",    "controls", roi_size)
+            cv2.setTrackbarPos("MinPix", "controls", min_pixels)
+            cv2.setTrackbarPos("Blur",   "controls", blur)
+    else:
+        # Fallback to slot-based profile
+        slot_profile = make_slot_profile_path(args.profile_dir, current_slot)
+        loaded = load_profile(slot_profile)
         if loaded is not None:
             hsv, roi_size, min_pixels, blur = loaded
             cv2.setTrackbarPos("H_low",  "controls", hsv.low[0])
@@ -145,11 +188,16 @@ def run_calibrator(args: argparse.Namespace) -> None:
 
         h, w = frame.shape[:2]
         roi_size = max(10, cv2.getTrackbarPos("ROI", "controls"))
-        cx, cy = w // 2, h // 2
-        left = max(0, cx - roi_size // 2)
-        right = min(w, cx + roi_size // 2)
-        top = max(0, cy - roi_size // 2)
-        bottom = min(h, cy + roi_size // 2)
+        if roi_cx is None or roi_cy is None:
+            roi_cx, roi_cy = w // 2, h // 2
+        half = roi_size // 2
+        # Clamp center so ROI stays inside frame
+        roi_cx = max(half, min(w - half, roi_cx))
+        roi_cy = max(half, min(h - half, roi_cy))
+        left = roi_cx - half
+        right = roi_cx + half
+        top = roi_cy - half
+        bottom = roi_cy + half
 
         roi = frame[top:bottom, left:right]
 
@@ -181,6 +229,22 @@ def run_calibrator(args: argparse.Namespace) -> None:
         count = int(cv2.countNonZero(mask))
         min_pixels = max(0, cv2.getTrackbarPos("MinPix", "controls"))
 
+        # Contours and overlay
+        largest_area = 0.0
+        try:
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                largest_area = float(cv2.contourArea(largest))
+                if overlay_on and largest_area >= float(args.min_area):
+                    x, y, w_box, h_box = cv2.boundingRect(largest)
+                    cv2.rectangle(frame, (left + x, top + y), (left + x + w_box, top + y + h_box), (0, 255, 255), 2)
+        except Exception:
+            pass
+
+        roi_area = max(1, roi.shape[0] * roi.shape[1])
+        coverage = float(count) / float(roi_area)
+
         color = (0, 255, 0) if count >= min_pixels else (0, 0, 255)
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
         cv2.putText(
@@ -200,47 +264,122 @@ def run_calibrator(args: argparse.Namespace) -> None:
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 255, 200), 2, cv2.LINE_AA,
         )
 
+        cv2.putText(
+            frame, f"Area: {largest_area:.0f} Cov: {coverage*100:.1f}%", (10, 78),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2, cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame, f"Slot:{current_slot} Overlay:{'ON' if overlay_on else 'OFF'}", (10, 104),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 220, 255), 2, cv2.LINE_AA,
+        )
+
+        # Rising-edge logging
+        above = (count >= min_pixels) and (largest_area >= float(args.min_area))
+        if csv_writer is not None and above and not above_prev:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            csv_writer.writerow([
+                ts, current_slot, count, min_pixels, int(largest_area), int(args.min_area),
+                round(coverage, 4), float(fps), int(left), int(top), int(right), int(bottom),
+            ])
+        above_prev = above
+
         cv2.imshow("frame", frame)
-        cv2.imshow("mask", mask)
+        if show_mask_window:
+            cv2.imshow("mask", mask)
+        else:
+            try:
+                cv2.destroyWindow("mask")
+            except Exception:
+                pass
 
         key = cv2.waitKey(1) & 0xFF
         if key in (27, ord("q")):
             break
         if key == ord(" "):
             paused = not paused
-        if key == ord("s"):
+        # Profile slots: 1..9 select current slot and try loading it
+        if key in [ord(str(n)) for n in range(1, 10)]:
+            current_slot = int(chr(key))
+            slot_profile = make_slot_profile_path(args.profile_dir, current_slot)
+            loaded = load_profile(slot_profile)
+            if loaded is not None:
+                hsv_b, roi_size_b, min_pixels_b, blur_b = loaded
+                cv2.setTrackbarPos("H_low",  "controls", hsv_b.low[0])
+                cv2.setTrackbarPos("S_low",  "controls", hsv_b.low[1])
+                cv2.setTrackbarPos("V_low",  "controls", hsv_b.low[2])
+                cv2.setTrackbarPos("H_high", "controls", hsv_b.high[0])
+                cv2.setTrackbarPos("S_high", "controls", hsv_b.high[1])
+                cv2.setTrackbarPos("V_high", "controls", hsv_b.high[2])
+                cv2.setTrackbarPos("ROI",    "controls", roi_size_b)
+                cv2.setTrackbarPos("MinPix", "controls", min_pixels_b)
+                cv2.setTrackbarPos("Blur",   "controls", blur_b)
+                print(f"Loaded slot {current_slot}: {slot_profile}")
+            else:
+                print(f"Slot {current_slot} has no profile yet. Press 's' to save.")
+
+        # ROI movement via keys: f/h (left/right), t/g (up/down)
+        if key == ord("f"):
+            roi_cx = (roi_cx or 0) - args.roi_step
+        if key == ord("h"):
+            roi_cx = (roi_cx or 0) + args.roi_step
+        if key == ord("t"):
+            roi_cy = (roi_cy or 0) - args.roi_step
+        if key == ord("g"):
+            roi_cy = (roi_cy or 0) + args.roi_step
+
+        # ROI size adjust and recenter
+        if key == ord("-"):
+            cv2.setTrackbarPos("ROI", "controls", max(10, roi_size - args.roi_step))
+        if key == ord("=") or key == ord("+"):
+            cv2.setTrackbarPos("ROI", "controls", min(800, roi_size + args.roi_step))
+        if key == ord("r"):
+            roi_cx, roi_cy = w // 2, h // 2
+
+        # Overlay and mask window toggles
+        if key == ord("o"):
+            overlay_on = not overlay_on
+        if key == ord("m"):
+            show_mask_window = not show_mask_window
+        if key in (ord("s"), ord("S")):
+            target_path = args.profile if args.profile else make_slot_profile_path(args.profile_dir, current_slot)
+            save_profile(
+                target_path,
+                HsvBounds.from_arrays(low, high),
+                roi_size=roi_size,
+                min_pixels=min_pixels,
+                blur=blur_k,
+            )
             if args.profile:
-                save_profile(
-                    args.profile,
-                    HsvBounds.from_arrays(low, high),
-                    roi_size=roi_size,
-                    min_pixels=min_pixels,
-                    blur=blur_k,
-                )
                 print(f"Saved profile to {args.profile}")
             else:
-                print("--profile not set; cannot save.")
-        if key == ord("l"):
-            if args.profile:
-                loaded = load_profile(args.profile)
-                if loaded is not None:
-                    hsv_b, roi_size_b, min_pixels_b, blur_b = loaded
-                    cv2.setTrackbarPos("H_low",  "controls", hsv_b.low[0])
-                    cv2.setTrackbarPos("S_low",  "controls", hsv_b.low[1])
-                    cv2.setTrackbarPos("V_low",  "controls", hsv_b.low[2])
-                    cv2.setTrackbarPos("H_high", "controls", hsv_b.high[0])
-                    cv2.setTrackbarPos("S_high", "controls", hsv_b.high[1])
-                    cv2.setTrackbarPos("V_high", "controls", hsv_b.high[2])
-                    cv2.setTrackbarPos("ROI",    "controls", roi_size_b)
-                    cv2.setTrackbarPos("MinPix", "controls", min_pixels_b)
-                    cv2.setTrackbarPos("Blur",   "controls", blur_b)
+                print(f"Saved slot {current_slot} profile to {target_path}")
+        if key in (ord("l"), ord("L")):
+            source_path = args.profile if args.profile else make_slot_profile_path(args.profile_dir, current_slot)
+            loaded = load_profile(source_path)
+            if loaded is not None:
+                hsv_b, roi_size_b, min_pixels_b, blur_b = loaded
+                cv2.setTrackbarPos("H_low",  "controls", hsv_b.low[0])
+                cv2.setTrackbarPos("S_low",  "controls", hsv_b.low[1])
+                cv2.setTrackbarPos("V_low",  "controls", hsv_b.low[2])
+                cv2.setTrackbarPos("H_high", "controls", hsv_b.high[0])
+                cv2.setTrackbarPos("S_high", "controls", hsv_b.high[1])
+                cv2.setTrackbarPos("V_high", "controls", hsv_b.high[2])
+                cv2.setTrackbarPos("ROI",    "controls", roi_size_b)
+                cv2.setTrackbarPos("MinPix", "controls", min_pixels_b)
+                cv2.setTrackbarPos("Blur",   "controls", blur_b)
+                if args.profile:
                     print(f"Loaded profile from {args.profile}")
                 else:
-                    print(f"Profile not found: {args.profile}")
+                    print(f"Loaded slot {current_slot} profile from {source_path}")
             else:
-                print("--profile not set; cannot load.")
+                print(f"Profile not found: {source_path}")
 
     cap.release()
+    if csv_file is not None:
+        try:
+            csv_file.close()
+        except Exception:
+            pass
     cv2.destroyAllWindows()
 
 
@@ -249,7 +388,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", type=str, default="0", help="Webcam index like '0' or a video file path")
     parser.add_argument("--width", type=int, default=0, help="Requested capture width (0 = default)")
     parser.add_argument("--height", type=int, default=0, help="Requested capture height (0 = default)")
-    parser.add_argument("--profile", type=str, default="calibrations/default_hsv.json", help="JSON file to save/load HSV profile")
+    parser.add_argument("--profile", type=str, default="", help="JSON file to save/load a single HSV profile (overrides slots)")
+    parser.add_argument("--profile-dir", type=str, default="calibrations", help="Directory to save/load slot profiles like slot_1.json")
+    parser.add_argument("--slot", type=int, default=1, help="Initial profile slot (1-9)")
 
     # Initial defaults
     parser.add_argument("--h-low", dest="h_low", type=int, default=0)
@@ -259,10 +400,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--s-high", dest="s_high", type=int, default=255)
     parser.add_argument("--v-high", dest="v_high", type=int, default=255)
     parser.add_argument("--roi", type=int, default=40, help="ROI square side length in pixels")
+    parser.add_argument("--roi-step", type=int, default=10, help="Step size for ROI move/resize keys")
     parser.add_argument("--min-pixels", dest="min_pixels", type=int, default=12)
     parser.add_argument("--blur", type=int, default=3, help="Gaussian blur kernel size (odd values)")
     parser.add_argument("--open-iter", dest="open_iter", type=int, default=1, help="Morphological open iterations")
     parser.add_argument("--close-iter", dest="close_iter", type=int, default=1, help="Morphological close iterations")
+    parser.add_argument("--min-area", dest="min_area", type=int, default=0, help="Minimum contour area to draw/report (0 disables)")
+    parser.add_argument("--log-csv", type=str, default="", help="Append detection events to this CSV file on rising edge")
 
     parser.add_argument("--controls-width", type=int, default=420)
     parser.add_argument("--controls-height", type=int, default=360)

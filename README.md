@@ -32,7 +32,11 @@ To select a different source, pass `--source` with webcam index like `1` or a fi
 - MinPix: Minimum pixel count threshold (display only)
 - Blur: Gaussian blur kernel size (odd values)
 - OpenIt / CloseIt: Morphological operations (noise removal/fill)
-- Keys: ESC or q to quit, space to pause, s to save profile, l to load profile
+- Keys: ESC or q (quit), space (pause), s (save), l (load)
+- Slots: 1..9 تغییر اسلات پروفایل (ذخیره/لود در `calibrations/slot_<n>.json`)
+- ROI move: f/h (چپ/راست)، t/g (بالا/پایین)، r (مرکز)
+- ROI size: - و = (کوچک/بزرگ با گام `--roi-step`)
+- Overlay: o (نمایش کانتور/باکس)، Mask: m (باز/بستن پنجره ماسک)
 
 ### Profiles
 
@@ -45,11 +49,14 @@ To select a different source, pass `--source` with webcam index like `1` or a fi
 ./scripts/run_calibrator.sh \
   --source 0 \
   --width 1280 --height 720 \
+  --profile-dir calibrations \
+  --slot 1 \
   --profile calibrations/red_target.json \
   --h-low 0 --s-low 150 --v-low 150 \
   --h-high 10 --s-high 255 --v-high 255 \
-  --roi 60 --min-pixels 25 --blur 5 \
-  --open-iter 1 --close-iter 1
+  --roi 60 --roi-step 10 --min-pixels 25 --min-area 40 --blur 5 \
+  --open-iter 1 --close-iter 1 \
+  --log-csv calibrations/events.csv
 ```
 
 ### Notes
@@ -81,5 +88,5 @@ Set-ExecutionPolicy -Scope Process RemoteSigned
 Run the program by double-clicking `dist/HSVCalibrator.exe` or from terminal:
 
 ```powershell
-./dist/HSVCalibrator.exe --source 0 --width 1280 --height 720
+./dist/HSVCalibrator.exe --source 0 --width 1280 --height 720 --profile-dir calibrations --slot 1
 ```
