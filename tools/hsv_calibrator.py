@@ -20,6 +20,8 @@ This script does NOT control mouse/keyboard and is NOT a gameplay automation too
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 import csv
 import json
 import os
@@ -413,9 +415,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _write_error_log(message: str) -> str:
+    try:
+        base = os.path.dirname(getattr(sys, 'executable', sys.argv[0]))
+        path = os.path.join(base or '.', 'hsv_calibrator_error.log')
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+            f.write('\n')
+            f.write(message)
+            f.write('\n' + ('=' * 60) + '\n')
+        return path
+    except Exception:
+        return ''
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
-    run_calibrator(args)
+    try:
+        run_calibrator(args)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        log_path = _write_error_log(tb)
+        msg = f"An error occurred. Details were written to: {log_path or 'error log'}"
+        print(msg, file=sys.stderr)
+        # Best-effort Windows message box
+        if os.name == 'nt':
+            try:
+                import ctypes  # type: ignore
+                ctypes.windll.user32.MessageBoxW(0, msg, "HSV Calibrator", 0x10)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
