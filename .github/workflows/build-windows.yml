@@ -1,0 +1,39 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - '**'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          pip install -r requirements.txt
+          if (Test-Path -Path requirements-dev.txt) { pip install -r requirements-dev.txt }
+
+      - name: Build executable
+        run: pyinstaller --name click-multiplier --onefile --noconsole main.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: click-multiplier-windows-x64
+          path: dist/click-multiplier.exe

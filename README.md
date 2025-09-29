@@ -54,6 +54,13 @@ build_windows.bat
 
 The executable will be at `dist/click-multiplier.exe`.
 
+## Download from GitHub Actions
+- پس از هر push یا اجرای دستی workflow، GitHub Actions فایل `click-multiplier.exe` را به عنوان artifact آپلود می‌کند.
+- برای دانلود:
+  1) به تب "Actions" در ریپو بروید.
+  2) روی آخرین workflow "Build Windows EXE" کلیک کنید.
+  3) بخش Artifacts را باز کرده و `click-multiplier-windows-x64` را دانلود کنید.
+
 ## Hotkeys
 - Toggle: `<ctrl>+<alt>+m`
 - Quit: `<ctrl>+<alt>+q`
