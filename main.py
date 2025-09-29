@@ -3,8 +3,9 @@
 import argparse
 import threading
 import time
+import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 try:
     import tkinter as tk
@@ -18,6 +19,63 @@ except Exception:
     print("Missing dependency or unsupported environment. Install with: pip install -r requirements.txt")
     raise
 
+# ---------------- Windows low-level helpers ----------------
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    # Constants
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    VK_LBUTTON = 0x01
+
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+
+    # GetAsyncKeyState
+    user32.GetAsyncKeyState.argtypes = [wintypes.INT]
+    user32.GetAsyncKeyState.restype = wintypes.SHORT
+
+    # SendInput setup
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = (
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+        )
+
+    class INPUT_union(ctypes.Union):
+        _fields_ = (("mi", MOUSEINPUT),)
+
+    class INPUT(ctypes.Structure):
+        _fields_ = (("type", wintypes.DWORD), ("union", INPUT_union))
+
+    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+    user32.SendInput.restype = wintypes.UINT
+
+    def _win_left_button_down() -> bool:
+        # High-order bit set means pressed
+        return bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+
+    def _win_send_left_click() -> None:
+        inputs = (INPUT * 2)()
+        inputs[0].type = 0
+        inputs[0].union.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)
+        inputs[1].type = 0
+        inputs[1].union.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)
+        sent = user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+        if sent != 2:
+            # Failure; ignore silently or log if needed
+            pass
+else:
+    def _win_left_button_down() -> bool:  # type: ignore[override]
+        return False
+
+    def _win_send_left_click() -> None:  # type: ignore[override]
+        return None
+
 
 @dataclass
 class ClickConfig:
@@ -26,6 +84,7 @@ class ClickConfig:
     enabled: bool = True
     toggle_hotkey: str = "<ctrl>+<alt>+m"
     quit_hotkey: str = "<ctrl>+<alt>+q"
+    game_mode: bool = False  # Windows-only: use Win32 SendInput + polling
 
 
 class ClickService:
@@ -40,6 +99,7 @@ class ClickService:
         self._mouse_listener: Optional[mouse.Listener] = None
         self._hotkeys: Optional[keyboard.GlobalHotKeys] = None
         self._hotkeys_thread: Optional[threading.Thread] = None
+        self._game_poller_thread: Optional[threading.Thread] = None
 
     # ---------------- Internal click logic ----------------
     def _perform_extra_clicks(self, button: mouse.Button) -> None:
@@ -49,7 +109,10 @@ class ClickService:
             self._synthesizing = True
         try:
             for _ in range(max(0, self.config.click_multiplier - 1)):
-                self._mouse_controller.click(button)
+                if sys.platform == "win32" and self.config.game_mode:
+                    _win_send_left_click()
+                else:
+                    self._mouse_controller.click(button)
                 time.sleep(max(0.0, self.config.interval_between_clicks_seconds))
         finally:
             with self._lock:
@@ -83,12 +146,19 @@ class ClickService:
         print(f" - Interval: {self.config.interval_between_clicks_seconds}s")
         print(f" - Toggle: {self.config.toggle_hotkey}")
         print(f" - Quit:   {self.config.quit_hotkey}")
+        if sys.platform == "win32" and self.config.game_mode:
+            print(" - Mode:   Windows Game Mode (SendInput + polling)")
+        else:
+            print(" - Mode:   Standard")
         # Start hotkeys thread
         self._hotkeys_thread = threading.Thread(target=self._hotkeys_loop, daemon=True)
         self._hotkeys_thread.start()
-        # Start mouse listener only if enabled to reduce overhead
-        if self.config.enabled:
-            self._start_mouse_listener()
+        # Start input mechanism
+        if sys.platform == "win32" and self.config.game_mode:
+            self._start_game_poller()
+        else:
+            if self.config.enabled:
+                self._start_mouse_listener()
 
     def _start_mouse_listener(self) -> None:
         with self._lock:
@@ -110,16 +180,21 @@ class ClickService:
         with self._lock:
             self.config.enabled = not self.config.enabled
             enabled = self.config.enabled
-        if enabled:
-            self._start_mouse_listener()
+        if sys.platform == "win32" and self.config.game_mode:
+            # In game mode, we just flip the flag; poller checks it
+            pass
         else:
-            self._stop_mouse_listener()
+            if enabled:
+                self._start_mouse_listener()
+            else:
+                self._stop_mouse_listener()
         print(f"[ClickMultiplier] Toggled: {'ON' if enabled else 'OFF'}")
 
     def quit(self) -> None:
         print("[ClickMultiplier] Quitting...")
         self._running = False
         self._stop_mouse_listener()
+        # game poller thread will exit as _running becomes False
 
     def apply_multiplier(self, value: int) -> None:
         with self._lock:
@@ -129,6 +204,35 @@ class ClickService:
         with self._lock:
             self.config.interval_between_clicks_seconds = max(0.0, float(value))
 
+    # --------------- Windows Game Mode (polling) ---------------
+    def _start_game_poller(self) -> None:
+        if self._game_poller_thread is not None:
+            return
+        def _poll_loop() -> None:
+            last_down = False
+            while self._running:
+                try:
+                    is_down = _win_left_button_down()
+                    if is_down and not last_down:
+                        # Transition: up -> down (physical click)
+                        with self._lock:
+                            allowed = self.config.enabled and not self._synthesizing
+                        if allowed:
+                            # Emit extra clicks using SendInput; left-click only
+                            self._synthesizing = True
+                            try:
+                                for _ in range(max(0, self.config.click_multiplier - 1)):
+                                    _win_send_left_click()
+                                    time.sleep(max(0.0, self.config.interval_between_clicks_seconds))
+                            finally:
+                                self._synthesizing = False
+                    last_down = is_down
+                    time.sleep(0.003)
+                except Exception:
+                    time.sleep(0.01)
+        self._game_poller_thread = threading.Thread(target=_poll_loop, daemon=True)
+        self._game_poller_thread.start()
+
 
 def parse_args() -> tuple[ClickConfig, bool]:
     parser = argparse.ArgumentParser(description="Multiply left mouse clicks.")
@@ -137,6 +241,7 @@ def parse_args() -> tuple[ClickConfig, bool]:
     parser.add_argument("--toggle", type=str, default="<ctrl>+<alt>+m", help="Global hotkey to toggle on/off")
     parser.add_argument("--quit", type=str, default="<ctrl>+<alt>+q", help="Global hotkey to quit")
     parser.add_argument("--no-gui", action="store_true", help="Run without GUI control panel")
+    parser.add_argument("--game-mode", action="store_true", help="Windows only: use SendInput + polling for games")
     args = parser.parse_args()
 
     multiplier = max(1, args.multiplier)
@@ -147,6 +252,7 @@ def parse_args() -> tuple[ClickConfig, bool]:
         enabled=True,
         toggle_hotkey=args.toggle,
         quit_hotkey=args.quit,
+        game_mode=bool(args.game_mode),
     )
     return cfg, bool(args.no_gui)
 

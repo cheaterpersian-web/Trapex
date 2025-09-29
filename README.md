@@ -8,6 +8,7 @@ A small Python app that multiplies your left-clicks. For example, one physical c
 - GUI control panel (Tkinter) to enable/disable and adjust settings
 - Left-click only; ignores right/middle clicks
 - Safe-guard to avoid infinite recursion when generating synthetic clicks
+- Windows Game Mode: low-level SendInput + polling for better compatibility in games
 
 ## Requirements
 - Python 3.8+
@@ -44,9 +45,17 @@ pip install -r requirements.txt
 ```
 
 ## Windows Run (GUI)
+Standard mode:
 ```powershell
 python .\main.py
 ```
+
+Game Mode (برای بازی‌ها):
+```powershell
+python .\main.py --game-mode
+```
+- در Game Mode از SendInput سطح پایین و GetAsyncKeyState برای تشخیص کلیک چپ استفاده می‌شود و سازگاری در بازی‌ها بیشتر است.
+- همچنان می‌توانید از GUI برای تغییر multiplier/interval و Toggle استفاده کنید.
 
 Headless mode:
 ```powershell
