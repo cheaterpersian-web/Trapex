@@ -5,6 +5,8 @@ A small Python app that multiplies your left-clicks. For example, one physical c
 ## Features
 - Toggle on/off with a global hotkey
 - Configurable multiplier and interval
+- GUI control panel (Tkinter) to enable/disable and adjust settings
+- Left-click only; ignores right/middle clicks
 - Safe-guard to avoid infinite recursion when generating synthetic clicks
 
 ## Requirements
@@ -21,9 +23,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Linux Run
+## Linux Run (GUI)
 ```bash
-python main.py --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
+python main.py
+```
+
+Headless mode (no GUI):
+```bash
+python main.py --no-gui --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
 ```
 
 ## Windows Setup
@@ -36,9 +43,14 @@ py -3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Windows Run
+## Windows Run (GUI)
 ```powershell
-python .\main.py --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
+python .\main.py
+```
+
+Headless mode:
+```powershell
+python .\main.py --no-gui --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
 ```
 
 ## Build Windows EXE
