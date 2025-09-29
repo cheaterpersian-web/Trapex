@@ -31,7 +31,7 @@ python main.py
 
 Headless mode (no GUI):
 ```bash
-python main.py --no-gui --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
+python main.py --no-gui --multiplier 5 --interval 0.015 --toggle "x" --quit "<ctrl>+<alt>+q"
 ```
 
 ## Windows Setup
@@ -59,7 +59,7 @@ python .\main.py --game-mode
 
 Headless mode:
 ```powershell
-python .\main.py --no-gui --multiplier 5 --interval 0.015 --toggle "<ctrl>+<alt>+m" --quit "<ctrl>+<alt>+q"
+python .\main.py --no-gui --multiplier 5 --interval 0.015 --toggle "x" --quit "<ctrl>+<alt>+q"
 ```
 
 ## Build Windows EXE
@@ -83,7 +83,7 @@ The executable will be at `dist/click-multiplier.exe`.
   3) بخش Artifacts را باز کرده و `click-multiplier-windows-x64` را دانلود کنید.
 
 ## Hotkeys
-- Toggle: `<ctrl>+<alt>+m`
+- Toggle: `x`
 - Quit: `<ctrl>+<alt>+q`
 
 You can change the multiplier and interval via flags.

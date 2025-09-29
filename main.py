@@ -82,7 +82,7 @@ class ClickConfig:
     click_multiplier: int = 5
     interval_between_clicks_seconds: float = 0.015
     enabled: bool = True
-    toggle_hotkey: str = "<ctrl>+<alt>+m"
+    toggle_hotkey: str = "x"
     quit_hotkey: str = "<ctrl>+<alt>+q"
     game_mode: bool = False  # Windows-only: use Win32 SendInput + polling
 
