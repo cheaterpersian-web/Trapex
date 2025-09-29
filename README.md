@@ -56,3 +56,30 @@ To select a different source, pass `--source` with webcam index like `1` or a fi
 
 - Requires Python 3.9+.
 - If you use a video file, the pause (space) key freezes the current frame for inspection.
+
+## Windows .exe
+
+Automated builds produce a standalone `.exe` using PyInstaller.
+
+- CI artifacts: Go to the repository's Actions tab, open the latest "build-windows-exe" run on your branch, and download the `HSVCalibrator-win64.zip` artifact.
+- Releases: Push a tag like `v0.1.0` to trigger a release upload of the zip.
+
+### Build locally on Windows
+
+1) Open PowerShell in the repo root and (optional) allow script execution for this session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process RemoteSigned
+```
+
+2) Build the exe (creates `dist/HSVCalibrator.exe` and zip):
+
+```powershell
+./scripts/build_windows.ps1 -Clean
+```
+
+Run the program by double-clicking `dist/HSVCalibrator.exe` or from terminal:
+
+```powershell
+./dist/HSVCalibrator.exe --source 0 --width 1280 --height 720
+```

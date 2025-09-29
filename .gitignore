@@ -13,3 +13,9 @@ venv/
 # Calibrator profiles
 calibrations/*.json
 !calibrations/.gitkeep
+
+# PyInstaller artifacts
+build/
+dist/
+*.spec
+*.zip
